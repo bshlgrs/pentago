@@ -2,9 +2,18 @@
 #include <vector>
 #include <list>
 
+#define BOARD_SIZE 9
+#define PENTA 5
+#define MINI_SQUARE_SIZE 3
+#define NUMBER_OF_MINI_SQUARES BOARD_SIZE / MINI_SQUARE_SIZE
+typedef signed char PlayerNumber;
+
+#define NoPlayer -1
+
 using namespace std;
 
 class PentagoBoard;
+
 
 struct Position {
     int x, y;
@@ -19,27 +28,39 @@ struct Rotation {
     Rotation(int x, int y, RotationDirection dir): x(x), y(y), dir(dir) {};
 };
 
+struct Move {
+    Position position;
+    Rotation rotation;
+    Move(Position pos, Rotation rot): position(pos), rotation(rot) {};
+};
 
 class Player;
 
 class PentagoBoard {
-    Player* board[9][9];
+    PlayerNumber board[BOARD_SIZE][BOARD_SIZE];
+    int playedPieces;
 
 public:
-    Player* getAtPosition(int x, int y) {
+    PentagoBoard() {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            for (int y = 0; y < BOARD_SIZE; y++) {
+                setAtPosition(x, y, NoPlayer);
+            }
+        }
+        playedPieces = 0;
+    }
+
+    PlayerNumber getAtPosition(int x, int y) {
         return board[y][x];
     }
 
-    Player* getAtPosition(Position pos) {
+    PlayerNumber getAtPosition(Position pos) {
         return board[pos.y][pos.x];
     }
 
-    void setAtPosition(int x, int y, Player &player) {
-        board[y][x] = &player;
-    }
-
-    void setAtPosition(Position pos, Player &player) {
-        board[pos.y][pos.x] = &player;
+    void playAtPosition(Position pos, PlayerNumber playerNumber) {
+        playedPieces ++;
+        setAtPosition(pos, playerNumber);
     }
 
     void rotate(Rotation rotation) {
@@ -52,83 +73,143 @@ public:
         }
     }
 
-    void rotateSquareClockwise(int x, int y) {
-        int offsetX = x * 3;
-        int offsetY = y * 3;
-
-        Player* temp = getAtPosition(offsetX, offsetY);
-        setAtPosition(offsetX, offsetY, *getAtPosition(offsetX, offsetY + 2));
-        setAtPosition(offsetX, offsetY + 2, *getAtPosition(offsetX + 2, offsetY + 2));
-        setAtPosition(offsetX + 2, offsetY + 2, *getAtPosition(offsetX + 2, offsetY));
-        setAtPosition(offsetX + 2, offsetY, *temp);
-
-        temp = getAtPosition(offsetX + 1, offsetY);
-        setAtPosition(offsetX + 1, offsetY, *getAtPosition(offsetX, offsetY + 1));
-        setAtPosition(offsetX, offsetY + 1, *getAtPosition(offsetX + 1, offsetY + 2));
-        setAtPosition(offsetX + 1, offsetY + 2, *getAtPosition(offsetX + 2, offsetY + 1));
-        setAtPosition(offsetX + 1, offsetY + 2, *temp);
+    void doMove(Move move, PlayerNumber playerNumber) {
+        playAtPosition(move.position, playerNumber);
+        rotate(move.rotation);
     }
 
-    void print(vector<Player *> *players) {
-        for (int y = 0; y < 9; y++) {
-            for (int x = 0; x < 9; x++) {
-                Player * atPos = getAtPosition(x, y);
-                if (atPos == nullptr) {
+    void print() {
+        for (int y = 0; y < BOARD_SIZE; y++) {
+            for (int x = 0; x < BOARD_SIZE; x++) {
+                PlayerNumber atPos = getAtPosition(x, y);
+                if (atPos == NoPlayer) {
                     cout << ".";
                 } else {
-                    int count = 0;
-                    for (Player * player : *players) {
-                        if (atPos == player) {
-                            cout << count;
-                            break;
-                        }
-                        count ++;
-                    }
+                    printf("%d", atPos);
                 }
 
-                if (x % 3 == 2) cout << " ";
+                if (x % MINI_SQUARE_SIZE == 2) cout << " ";
             }
             cout << endl;
-            if (y % 3 == 2) cout << endl;
+            if (y % MINI_SQUARE_SIZE == 2) cout << endl;
         }
         cout << endl;
     }
 
-    Player *getWinner() {
-        vector<pair<int, int>> directions = { {0, 1}, {1, 0}, {1, 1}, {1, -1} };
-        for (pair<int, int> direction : directions) {
-            for (int x = 0; x < 9; x++) {
-                for (int y = 0; y < 9; y++) {
-                    int xx = x;
-                    int yy = y;
-                    int runLength = 0;
-                    Player *player = NULL;
-
-                    while (xx < 9 && x >= 0 && yy < 9 && yy >= 0) {
-//                        cout << xx << "," << yy << endl;
-                        if (player == getAtPosition(xx, yy)) {
-                            runLength ++;
-                            if (runLength == 5 && player != NULL) {
-                                return player;
-                            }
-                        }
-                        player = getAtPosition(xx, yy);
-                        runLength = 1;
-                        xx += direction.first;
-                        yy += direction.second;
-                    }
-                }
+    PlayerNumber getWinner() {
+        // vertical wins
+        for (int y = 0; y < BOARD_SIZE; y++) {
+            PlayerNumber winner = checkLine(0, y, 1, 0);
+            if (winner != NoPlayer) {
+                return winner;
             }
         }
 
-        return nullptr;
+        // horizontal wins
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            PlayerNumber winner = checkLine(x, 0, 0, 1);
+            if (winner != NoPlayer) {
+                return winner;
+            }
+        }
+
+        // diagonals
+        for (int start= 0; start < BOARD_SIZE; start++) {
+            PlayerNumber winner = checkLine(start, 0, 1, 1);
+            if (winner != NoPlayer) {
+                return winner;
+            }
+
+            winner = checkLine(start, 0, 1, -1);
+            if (winner != NoPlayer) {
+                return winner;
+            }
+
+            winner = checkLine(0, start, 1, 1);
+            if (winner != NoPlayer) {
+                return winner;
+            }
+
+            winner = checkLine(0, start, 1, -1);
+            if (winner != NoPlayer) {
+                return winner;
+            }
+        }
+
+        return NoPlayer;
+    }
+
+    bool isDraw() {
+        return playedPieces == BOARD_SIZE * BOARD_SIZE;
+    }
+
+private:
+
+    PlayerNumber checkLine(int startX, int startY, int deltaX, int deltaY) {
+        int endX = startX + deltaX * (PENTA - 1);
+        if (endX < 0 || endX > BOARD_SIZE - 1) {
+            return NoPlayer;
+        }
+
+        int endY = startY + deltaY * (PENTA - 1);
+        if (endY < 0 || endY > BOARD_SIZE - 1) {
+            return NoPlayer;
+        }
+
+        int x = startX;
+        int y = startY;
+
+        PlayerNumber prev = NoPlayer;
+        char count = 0;
+
+        while (x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE) {
+            PlayerNumber piece = getAtPosition(x, y);
+            if (piece == prev && piece != NoPlayer) {
+                count++;
+                if (count == PENTA) {
+                    return piece;
+                }
+            } else {
+                prev = piece;
+                count = 1;
+            }
+
+            x += deltaX;
+            y += deltaY;
+        }
+
+        return NoPlayer;
+    }
+
+    void rotateSquareClockwise(int x, int y) {
+        int offsetX = x * MINI_SQUARE_SIZE;
+        int offsetY = y * MINI_SQUARE_SIZE;
+
+        PlayerNumber temp = getAtPosition(offsetX, offsetY);
+        setAtPosition(offsetX, offsetY, getAtPosition(offsetX, offsetY + 2));
+        setAtPosition(offsetX, offsetY + 2, getAtPosition(offsetX + 2, offsetY + 2));
+        setAtPosition(offsetX + 2, offsetY + 2, getAtPosition(offsetX + 2, offsetY));
+        setAtPosition(offsetX + 2, offsetY, temp);
+
+        temp = getAtPosition(offsetX + 1, offsetY);
+        setAtPosition(offsetX + 1, offsetY, getAtPosition(offsetX, offsetY + 1));
+        setAtPosition(offsetX, offsetY + 1, getAtPosition(offsetX + 1, offsetY + 2));
+        setAtPosition(offsetX + 1, offsetY + 2, getAtPosition(offsetX + 2, offsetY + 1));
+        setAtPosition(offsetX + 1, offsetY + 2, temp);
+    }
+
+    void setAtPosition(int x, int y, PlayerNumber playerNumber) {
+        board[y][x] = playerNumber;
+    }
+
+    void setAtPosition(Position pos, PlayerNumber playerNumber) {
+        setAtPosition(pos.x, pos.y, playerNumber);
     }
 };
 
 class Player {
 public:
-    virtual Position getMove(PentagoBoard *board) = 0;
-    virtual Rotation getRotation(PentagoBoard *board) = 0;
+    virtual Move getMove(PentagoBoard *board) = 0;
     virtual string getName() = 0;
 };
 
@@ -137,16 +218,15 @@ class HumanPlayer: public Player {
 public:
     HumanPlayer(string name): name(name) {}
 
-    Position getMove(PentagoBoard *board) {
-        int x, y;
-        printf("give me your x: ");
-        scanf("%d", &x);
-        printf("\ngive me your y: ");
-        scanf("%d", &y);
+    Move getMove(PentagoBoard *board) {
+        int x, y, turnX, turnY;
+        char turndir;
+        printf("give me your x, y, turndir, turnx, turny: ");
+        scanf("%d %d %c %d %d", &x, &y, &turndir, &turnX, &turnY);
 
-        if (board->getAtPosition(x, y) == nullptr) {
+        if (board->getAtPosition(x, y) == NoPlayer) {
             printf("\ncoolio!\n\n");
-            return Position(x, y);
+            return Move(Position(x, y), Rotation(turnX, turnY, turndir == 'l' ? COUNTERCLOCKWISE : CLOCKWISE));
         } else {
             printf("That position is already taken! Give me an empty position please.\n");
             return getMove(board);
@@ -174,37 +254,69 @@ public:
     }
 };
 
+class RandomPlayer: public Player {
+    string name;
+
+public:
+    RandomPlayer(string name): name(name) {}
+
+    string getName() {
+        return name;
+    }
+
+    Move getMove(PentagoBoard *board) {
+        int x = rand() % BOARD_SIZE;
+        int y = rand() % BOARD_SIZE;
+
+        if (board->getAtPosition(x, y) != NoPlayer) {
+            return getMove(board);
+        }
+
+        return Move(
+                Position(x, y),
+                Rotation(rand() % NUMBER_OF_MINI_SQUARES,
+                         rand() % NUMBER_OF_MINI_SQUARES,
+                         rand() % 2 == 0 ? CLOCKWISE : COUNTERCLOCKWISE));
+    }
+};
+
 class PentagoGame {
     PentagoBoard *board;
     vector<Player*> *players;
 public:
     PentagoGame(vector<Player*> *players): players(players) {
-        board = new PentagoBoard;
+        board = new PentagoBoard();
     }
 
     void playGame() {
+        int idx;
         while (!isFinished()) {
-            for(Player* player: *players) {
+            idx = 0;
+            for (Player *player: *players) {
                 cout << "It is " << player->getName() << "'s turn!" << endl;
-                board->print(players);
-                Position move = player->getMove(board);
-                board->setAtPosition(move, *player);
-
-                cout << "It is " << player->getName() << "'s rotation!" << endl;
-                board->print(players);
-                Rotation rot = player->getRotation(board);
-                board->rotate(rot);
+                board->print();
+                Move move = player->getMove(board);
+                board->playAtPosition(move.position, idx);
+                if (isFinished()) goto end;
+                board->rotate(move.rotation);
+                if (isFinished()) goto end;
+                idx++;
             }
         }
+        end:
+            board->print();
+            printf("%d wins!\n", board->getWinner());
     }
 
     bool isFinished() {
-        return board->getWinner() != nullptr;
+        return board->getWinner() != NoPlayer || board->isDraw();
     }
 };
 
 int main() {
-    vector<Player *> players { new HumanPlayer("Buck"), new HumanPlayer("Daniel")};
+    srand (time(NULL));
+
+    vector<Player *> players { new RandomPlayer("Buck"), new RandomPlayer("Daniel"), new RandomPlayer("Aubrey"), new RandomPlayer("Patrick")};
 
     PentagoGame *game = new PentagoGame(&players);
     game->playGame();
