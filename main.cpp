@@ -2,6 +2,8 @@
 #include <vector>
 #include <list>
 #include <assert.h>
+#include <cstdio>
+#include <sstream>
 
 #define BOARD_SIZE 9
 #define PENTA 5
@@ -44,8 +46,8 @@ struct Move {
 };
 
 void printMove(Move move) {
-    printf("%d %d %c %d %d\n", move.position.x, move.position.y,
-           move.rotation.dir == CLOCKWISE ? 'r' : 'l', move.rotation.x, move.rotation.y);
+    printf("%d %d %d %d %c\n", move.position.x, move.position.y, move.rotation.x, move.rotation.y,
+           move.rotation.dir == CLOCKWISE ? 'r' : 'l');
 }
 
 class Player;
@@ -86,6 +88,14 @@ public:
         return board[pos.y][pos.x];
     }
 
+    void playWhoeverAtPosition(Position pos, PlayerNumber n) {
+        assert(getAtPosition(pos) == NoPlayer);
+        if (n != NoPlayer) {
+            playedPieces++;
+            setAtPosition(pos, n);
+        }
+    }
+
     void playAtPosition(Position pos) {
         playedPieces ++;
         setAtPosition(pos, playerToMoveNext);
@@ -114,6 +124,7 @@ public:
 
     void doMove(Move move, PlayerNumber playerNumber) {
         assert(playerToMoveNext == playerNumber);
+        assert(getAtPosition(move.position) == NoPlayer);
         playAtPosition(move.position);
         rotate(move.rotation);
     }
@@ -123,7 +134,7 @@ public:
         unplayAtPosition(move.position, playerNumber);
     }
 
-    void print() {
+    void print() const {
         for (int y = 0; y < BOARD_SIZE; y++) {
             for (int x = 0; x < BOARD_SIZE; x++) {
                 PlayerNumber atPos = getAtPosition(x, y);
@@ -141,7 +152,7 @@ public:
         cout << endl;
     }
 
-    PlayerNumber getWinner() {
+    PlayerNumber getWinner() const {
         // vertical wins
         for (int y = 0; y < BOARD_SIZE; y++) {
             PlayerNumber winner = checkLine(0, y, 1, 0);
@@ -184,7 +195,7 @@ public:
         return NoPlayer;
     }
 
-    bool isDraw() {
+    bool isDraw() const {
         return playedPieces == BOARD_SIZE * BOARD_SIZE;
     }
 
@@ -211,7 +222,7 @@ public:
     }
 
 private:
-    PlayerNumber checkLine(int startX, int startY, int deltaX, int deltaY) {
+    PlayerNumber checkLine(int startX, int startY, int deltaX, int deltaY) const {
         int endX = startX + deltaX * (PENTA - 1);
         if (endX < 0 || endX > BOARD_SIZE - 1) {
             return NoPlayer;
@@ -349,22 +360,151 @@ Move *getWinningMoveIfExists(const PentagoBoard *board) {
 
 class AlmostRandomPlayer: public Player {
     string name;
-    RandomPlayer randomPlayer;
-
 public:
-    AlmostRandomPlayer(string name): name(name), randomPlayer(RandomPlayer(name)) {}
+    AlmostRandomPlayer(string name): name(name) {}
 
     string getName() { return name; }
 
     Move getMove(const PentagoBoard *board) {
         Move * move = getWinningMoveIfExists(board);
         if (move == nullptr) {
-            return randomPlayer.getMove(board);
+            return getRandomMove(board);
         } else {
             return *move;
         }
     }
 };
+
+class HeuristicPlayer: public Player {
+    string name;
+public:
+    HeuristicPlayer(string name): name(name) {}
+
+    string getName() { return name; }
+
+    Move getMove(const PentagoBoard *board) {
+        Move * move = getWinningMoveIfExists(board);
+        if (move == nullptr) {
+            return getHeuristicMove(board);
+        } else {
+            return *move;
+        }
+    }
+
+    Move getHeuristicMove(const PentagoBoard *board) {
+        float scores[BOARD_SIZE][BOARD_SIZE] = {0.0};
+
+        for (int squareX = 0; squareX < NUMBER_OF_MINI_SQUARES; squareX++) {
+            for (int squareY = 0; squareY < NUMBER_OF_MINI_SQUARES; squareY++) {
+                getScoresForMiniSquare(board, squareX, squareY, scores);
+            }
+        }
+
+        Position bestPosition = getRandomMove(board).position;
+        float bestScore = 0;
+
+        // print the heuristic function:
+//        for (int y = 0; y < BOARD_SIZE; y++) {
+//            for (int x = 0; x < BOARD_SIZE; x++) {
+//                printf("%f ", scores[y][x]);
+//            }
+//            printf("\n");
+//        }
+
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            for (int y = 0; y < BOARD_SIZE; y++) {
+                if (board->getAtPosition(x, y) != NoPlayer) {
+                    assert(scores[y][x] == 0.0);
+                }
+
+                if (scores[y][x] > bestScore) {
+                    bestPosition = Position(x, y);
+                    bestScore = scores[y][x];
+                }
+            }
+        }
+
+        return Move(bestPosition, getRandomMove(board).rotation);
+    }
+
+    void getScoresForMiniSquare(const PentagoBoard *board, int squareX, int squareY, float scores[BOARD_SIZE][BOARD_SIZE]) {
+        assert(MINI_SQUARE_SIZE == 3);
+
+        int offsetX = squareX * MINI_SQUARE_SIZE;
+        int offsetY = squareY * MINI_SQUARE_SIZE;
+
+        // vertical
+        for (int x = offsetX; x < offsetX + 3; x++) {
+            getScoresForThree(board, x, offsetY, x, offsetY + 1, x, offsetY + 2, scores);
+        }
+
+        // horizontal
+        for (int y = offsetY; y < offsetY + 3; y++) {
+            getScoresForThree(board, offsetX, y, offsetX + 1, y, offsetX + 2, y, scores);
+        }
+    }
+
+    void getScoresForThree(const PentagoBoard *board, int x1, int y1, int x2, int y2, int x3, int y3,
+                           float scores[BOARD_SIZE][BOARD_SIZE]) {
+        PlayerNumber curr = board->playerToMoveNext;
+
+        int empties = 0;
+        // 8 is more players that will ever play.
+        int counts[8] = {0};
+
+        PlayerNumber places[3] = {-1, -1, -1};
+
+        places[0] = board->getAtPosition(x1, y1);
+        places[1] = board->getAtPosition(x2, y2);
+        places[2] = board->getAtPosition(x3, y3);
+
+        for (int i = 0; i < 3; i++) {
+            if (places[i] == NoPlayer) {
+                empties ++;
+            } else {
+                counts[places[i]] ++;
+            }
+        }
+
+        if (counts[curr] == 3) {
+            return;
+        } else if (counts[curr] == 2 && empties == 1) {
+            if (places[0] == NoPlayer)
+                scores[y1][x1] += 2.1;
+            if (places[1] == NoPlayer)
+                scores[y2][x2] += 2.1;
+            if (places[2] == NoPlayer)
+                scores[y3][x3] += 2.1;
+
+            return;
+        } else if (empties == 1) {
+            if (places[0] == places[1]) {
+                scores[y3][x3] += 1.5;
+            } else if (places[1] == places[2]) {
+                scores[y1][x1] += 1.5;
+            } else if (places[0] == places[2]) {
+                scores[y2][x2] += 1.5;
+            }
+        } else if (empties == 2) {
+            if (counts[curr] == 1) {
+                if (places[0] == NoPlayer)
+                    scores[y1][x1] += 1;
+                if (places[1] == NoPlayer)
+                    scores[y2][x2] += 1;
+                if (places[2] == NoPlayer)
+                    scores[y3][x3] += 1;
+            } else {
+                if (places[0] == NoPlayer)
+                    scores[y1][x1] += 0.4;
+                if (places[1] == NoPlayer)
+                    scores[y2][x2] += 0.4;
+                if (places[2] == NoPlayer)
+                    scores[y3][x3] += 0.4;
+            }
+        }
+    }
+};
+
 
 class PentagoGame {
     PentagoBoard *board;
@@ -405,23 +545,65 @@ public:
     }
 };
 
-int main() {
+int test_main() {
     srand (time(NULL));
-//
-    vector<Player *> players { new AlmostRandomPlayer("Daniel"), new RandomPlayer("Buck")};
 
-    PentagoBoard *board = new PentagoBoard(9);
+    vector<Player *> players { new HumanPlayer("Daniel"), new HeuristicPlayer("Buck")};
 
     PentagoGame *game = new PentagoGame(&players);
 
     int betterPlayerWinCount = 0;
 
-    for (int i = 0; i < 100; ++i) {
+    for (int i = 0; i < 1; ++i) {
         if (i%100 == 0) {
             printf("%d\n", i);
         }
         PentagoGame *game = new PentagoGame(&players);
-        betterPlayerWinCount += game->playGame(false) == 0;
+        betterPlayerWinCount += game->playGame(true) == 0;
     }
     printf("%d\n", betterPlayerWinCount);
+
+
+    return 0;
+}
+
+int main(int argc, const char* argv[]) {
+    float duration;
+    int numberOfPlayers;
+    int mySymbol;
+
+    sscanf(argv[1], "%f", &duration);
+    sscanf(argv[2], "%d", &numberOfPlayers);
+    sscanf(argv[3], "%d", &mySymbol);
+
+    PentagoBoard *board = new PentagoBoard(numberOfPlayers);
+
+    printf("%lf %d %d\n", duration, numberOfPlayers, mySymbol);
+
+    string line;
+    std::getline(std::cin, line);
+
+    string word;
+    vector<string> words;
+
+    for (stringstream s(line); s >> word; )
+        words.push_back(word);
+
+    for (int i=0; i<words.size(); i++)
+    {
+        int val;
+        sscanf(words[i].c_str(), "%d", &val);
+
+        board->playWhoeverAtPosition(Position(i % BOARD_SIZE, i / BOARD_SIZE), val - 1);
+    }
+
+    board->playerToMoveNext = mySymbol;
+
+//    board->print();
+
+    HeuristicPlayer player("Buck");
+    printMove(player.getMove(board));
+
+
+    return 0;
 }
