@@ -1,12 +1,13 @@
 #include <iostream>
 #include <vector>
 #include <list>
+#include <assert.h>
 
 #define BOARD_SIZE 9
 #define PENTA 5
 #define MINI_SQUARE_SIZE 3
 #define NUMBER_OF_MINI_SQUARES BOARD_SIZE / MINI_SQUARE_SIZE
-typedef signed char PlayerNumber;
+typedef int PlayerNumber; // should be signed char
 
 #define NoPlayer -1
 
@@ -22,6 +23,14 @@ struct Position {
 
 enum RotationDirection { CLOCKWISE, COUNTERCLOCKWISE };
 
+RotationDirection fromBool(bool dir) {
+    return dir ? CLOCKWISE : COUNTERCLOCKWISE;
+}
+
+RotationDirection swapDir(RotationDirection dir) {
+    return fromBool(dir == COUNTERCLOCKWISE);
+}
+
 struct Rotation {
     int x, y;
     RotationDirection dir;
@@ -34,14 +43,22 @@ struct Move {
     Move(Position pos, Rotation rot): position(pos), rotation(rot) {};
 };
 
+void printMove(Move move) {
+    printf("%d %d %c %d %d\n", move.position.x, move.position.y,
+           move.rotation.dir == CLOCKWISE ? 'r' : 'l', move.rotation.x, move.rotation.y);
+}
+
 class Player;
 
 class PentagoBoard {
     PlayerNumber board[BOARD_SIZE][BOARD_SIZE];
-    int playedPieces;
 
+    int playedPieces;
 public:
-    PentagoBoard() {
+    int playerToMoveNext;
+    int numberOfPlayers;
+
+    PentagoBoard(int numberOfPlayers): numberOfPlayers(numberOfPlayers) {
         for (int x = 0; x < BOARD_SIZE; x++) {
             for (int y = 0; y < BOARD_SIZE; y++) {
                 setAtPosition(x, y, NoPlayer);
@@ -50,17 +67,39 @@ public:
         playedPieces = 0;
     }
 
-    PlayerNumber getAtPosition(int x, int y) {
+    PentagoBoard(const PentagoBoard& other) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            for (int y = 0; y < BOARD_SIZE; y++) {
+                setAtPosition(x, y, other.getAtPosition(x, y));
+            }
+        }
+        playedPieces = other.playedPieces;
+        playerToMoveNext = other.playerToMoveNext;
+        numberOfPlayers = other.numberOfPlayers;
+    };
+
+    PlayerNumber getAtPosition (int x, int y) const {
         return board[y][x];
     }
 
-    PlayerNumber getAtPosition(Position pos) {
+    PlayerNumber getAtPosition(Position pos) const {
         return board[pos.y][pos.x];
     }
 
-    void playAtPosition(Position pos, PlayerNumber playerNumber) {
+    void playAtPosition(Position pos) {
         playedPieces ++;
-        setAtPosition(pos, playerNumber);
+        setAtPosition(pos, playerToMoveNext);
+        playerToMoveNext = (playerToMoveNext + 1) % numberOfPlayers;
+    }
+
+    void unplayAtPosition(Position pos, PlayerNumber playerNumber) {
+        playedPieces --;
+        if (playerNumber != getAtPosition(pos)) {
+            assert(playerNumber == getAtPosition(pos));
+        }
+
+        setAtPosition(pos, NoPlayer);
+        playerToMoveNext = playerNumber;
     }
 
     void rotate(Rotation rotation) {
@@ -74,8 +113,14 @@ public:
     }
 
     void doMove(Move move, PlayerNumber playerNumber) {
-        playAtPosition(move.position, playerNumber);
+        assert(playerToMoveNext == playerNumber);
+        playAtPosition(move.position);
         rotate(move.rotation);
+    }
+
+    void undoMove(Move move, PlayerNumber playerNumber) {
+        rotate(Rotation(move.rotation.x, move.rotation.y, swapDir(move.rotation.dir)));
+        unplayAtPosition(move.position, playerNumber);
     }
 
     void print() {
@@ -143,8 +188,29 @@ public:
         return playedPieces == BOARD_SIZE * BOARD_SIZE;
     }
 
-private:
+    std::vector<Move> getMoves() const {
+        std::vector<Move> moves;
 
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            for (int y = 0; y < BOARD_SIZE; y++) {
+                if (getAtPosition(x, y) != NoPlayer) {
+                    continue;
+                }
+
+                for (int dir = 0; dir < 2; dir ++) {
+                    for (int rotationX = 0; rotationX < NUMBER_OF_MINI_SQUARES; rotationX++) {
+                        for (int rotationY = 0; rotationY < NUMBER_OF_MINI_SQUARES; rotationY++) {
+                            moves.push_back(Move(Position(x, y), Rotation(rotationX, rotationY, fromBool(dir == 0))));
+                        }
+                    }
+                }
+            }
+        }
+
+        return moves;
+    }
+
+private:
     PlayerNumber checkLine(int startX, int startY, int deltaX, int deltaY) {
         int endX = startX + deltaX * (PENTA - 1);
         if (endX < 0 || endX > BOARD_SIZE - 1) {
@@ -195,7 +261,7 @@ private:
         setAtPosition(offsetX + 1, offsetY, getAtPosition(offsetX, offsetY + 1));
         setAtPosition(offsetX, offsetY + 1, getAtPosition(offsetX + 1, offsetY + 2));
         setAtPosition(offsetX + 1, offsetY + 2, getAtPosition(offsetX + 2, offsetY + 1));
-        setAtPosition(offsetX + 1, offsetY + 2, temp);
+        setAtPosition(offsetX + 2, offsetY + 1, temp);
     }
 
     void setAtPosition(int x, int y, PlayerNumber playerNumber) {
@@ -209,7 +275,7 @@ private:
 
 class Player {
 public:
-    virtual Move getMove(PentagoBoard *board) = 0;
+    virtual Move getMove(const PentagoBoard *board) = 0;
     virtual string getName() = 0;
 };
 
@@ -218,7 +284,7 @@ class HumanPlayer: public Player {
 public:
     HumanPlayer(string name): name(name) {}
 
-    Move getMove(PentagoBoard *board) {
+    Move getMove(const PentagoBoard *board) {
         int x, y, turnX, turnY;
         char turndir;
         printf("give me your x, y, turndir, turnx, turny: ");
@@ -233,26 +299,25 @@ public:
         }
     }
 
-    Rotation getRotation(PentagoBoard *board) {
-        int x, y;
-        printf("give me your x: ");
-        scanf("%d", &x);
-        printf("\ngive me your y: ");
-        scanf("%d", &y);
-
-        int dir;
-        printf("type 0 for clockwise, 1 for counterclockwise: ");
-        scanf("%d", &dir);
-
-        RotationDirection rotationDirection = dir ? COUNTERCLOCKWISE : CLOCKWISE;
-
-        return Rotation(x, y, rotationDirection);
-    }
-
     string getName() {
         return name;
     }
 };
+
+Move getRandomMove(const PentagoBoard *board) {
+    int x = rand() % BOARD_SIZE;
+    int y = rand() % BOARD_SIZE;
+
+    if (board->getAtPosition(x, y) != NoPlayer) {
+        return getRandomMove(board);
+    }
+
+    return Move(
+            Position(x, y),
+            Rotation(rand() % NUMBER_OF_MINI_SQUARES,
+                     rand() % NUMBER_OF_MINI_SQUARES,
+                     rand() % 2 == 0 ? CLOCKWISE : COUNTERCLOCKWISE));
+}
 
 class RandomPlayer: public Player {
     string name;
@@ -260,23 +325,44 @@ class RandomPlayer: public Player {
 public:
     RandomPlayer(string name): name(name) {}
 
-    string getName() {
-        return name;
+    string getName() { return name; }
+
+    Move getMove(const PentagoBoard *board) {
+        return getRandomMove(board);
+    }
+};
+
+Move *getWinningMoveIfExists(const PentagoBoard *board) {
+    PentagoBoard *copiedBoard = new PentagoBoard(*board);
+    int myPlayerNumber = board->playerToMoveNext;
+
+    for (auto move: copiedBoard->getMoves()) {
+        copiedBoard->doMove(move, myPlayerNumber);
+        if (copiedBoard->getWinner() == myPlayerNumber) {
+            return new Move(move);
+        }
+        copiedBoard->undoMove(move, myPlayerNumber);
     }
 
-    Move getMove(PentagoBoard *board) {
-        int x = rand() % BOARD_SIZE;
-        int y = rand() % BOARD_SIZE;
+    return nullptr;
+}
 
-        if (board->getAtPosition(x, y) != NoPlayer) {
-            return getMove(board);
+class AlmostRandomPlayer: public Player {
+    string name;
+    RandomPlayer randomPlayer;
+
+public:
+    AlmostRandomPlayer(string name): name(name), randomPlayer(RandomPlayer(name)) {}
+
+    string getName() { return name; }
+
+    Move getMove(const PentagoBoard *board) {
+        Move * move = getWinningMoveIfExists(board);
+        if (move == nullptr) {
+            return randomPlayer.getMove(board);
+        } else {
+            return *move;
         }
-
-        return Move(
-                Position(x, y),
-                Rotation(rand() % NUMBER_OF_MINI_SQUARES,
-                         rand() % NUMBER_OF_MINI_SQUARES,
-                         rand() % 2 == 0 ? CLOCKWISE : COUNTERCLOCKWISE));
     }
 };
 
@@ -285,27 +371,33 @@ class PentagoGame {
     vector<Player*> *players;
 public:
     PentagoGame(vector<Player*> *players): players(players) {
-        board = new PentagoBoard();
+        board = new PentagoBoard(players->size());
     }
 
-    void playGame() {
+    PlayerNumber playGame(bool verbose) {
         int idx;
         while (!isFinished()) {
             idx = 0;
             for (Player *player: *players) {
-                cout << "It is " << player->getName() << "'s turn!" << endl;
-                board->print();
+                if (verbose) {
+                    cout << "It is " << player->getName() << "'s turn!" << endl;
+                    board->print();
+                }
                 Move move = player->getMove(board);
-                board->playAtPosition(move.position, idx);
+                board->playAtPosition(move.position);
                 if (isFinished()) goto end;
                 board->rotate(move.rotation);
                 if (isFinished()) goto end;
                 idx++;
             }
         }
+
         end:
-            board->print();
-            printf("%d wins!\n", board->getWinner());
+            if (verbose) {
+                board->print();
+                printf("%d wins!\n", board->getWinner());
+            }
+            return board->getWinner();
     }
 
     bool isFinished() {
@@ -315,9 +407,21 @@ public:
 
 int main() {
     srand (time(NULL));
+//
+    vector<Player *> players { new AlmostRandomPlayer("Daniel"), new RandomPlayer("Buck")};
 
-    vector<Player *> players { new RandomPlayer("Buck"), new RandomPlayer("Daniel"), new RandomPlayer("Aubrey"), new RandomPlayer("Patrick")};
+    PentagoBoard *board = new PentagoBoard(9);
 
     PentagoGame *game = new PentagoGame(&players);
-    game->playGame();
+
+    int betterPlayerWinCount = 0;
+
+    for (int i = 0; i < 100; ++i) {
+        if (i%100 == 0) {
+            printf("%d\n", i);
+        }
+        PentagoGame *game = new PentagoGame(&players);
+        betterPlayerWinCount += game->playGame(false) == 0;
+    }
+    printf("%d\n", betterPlayerWinCount);
 }
